@@ -1,6 +1,12 @@
 # from langchain_ollama import OllamaEmbeddings, OllamaLLM
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_huggingface import HuggingFaceEmbeddings
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+api_key=os.getenv("GOOGLE_API_KEY")
+
 class Models:
     def __init__(self):
         # Initialize only the LLM immediately (if needed)
