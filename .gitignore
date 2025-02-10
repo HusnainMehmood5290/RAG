@@ -2,10 +2,12 @@
 store/local_store/*
 store/vector_store/*
 ingestion/raw_data/*
+ingestion/converted/*
 
 !store/local_store/.gitkeep
 !store/vector_store/.gitkeep
 !ingestion/raw_data/.gitkeep
+!ingestion/converted/.gitkeep
 
 
 # Byte-compiled / optimized / DLL files

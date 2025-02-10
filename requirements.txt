@@ -9,3 +9,4 @@ langchain-text-splitters
 unstructured
 llama-cpp-python
 dotenv
+unstructured[md]
