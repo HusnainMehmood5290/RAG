@@ -1,0 +1,11 @@
+langchain-google_genai
+langchain-huggingface
+langchain-chroma
+langchain
+langchain-core
+langchain-community
+pymupdf4llm
+langchain-text-splitters
+unstructured
+llama-cpp-python
+dotenv
