@@ -9,6 +9,7 @@ logging.basicConfig(level=logging.INFO, format='[%(asctime)s]: %(message)s:')
 list_of_files = [
     "store/local_store/.gitkeep",
     "store/vector_store/.gitkeep",
+    "notebooks//trials.ipynb",
     
     "models/model.py",
     "models/__init__.py",
