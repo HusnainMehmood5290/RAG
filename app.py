@@ -1,4 +1,18 @@
 from models.model import Models
-model=Models()
-llm=model.gemini_llm
-print(llm.invoke("hi").content)
+import os
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
+# Get the model property name from .env
+model_name = os.getenv("MODEL_NAME")
+
+# Initialize the model class
+model = Models()
+
+# Dynamically access the model property
+llm = getattr(model, model_name, None)
+
+
+print(llm.invoke("hi").content)  # If it's an LLM, invoke it
