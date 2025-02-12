@@ -12,3 +12,5 @@ dotenv
 unstructured[md]
 langgraph
 sentence-transformers
+langchain_cohere
+nltk
