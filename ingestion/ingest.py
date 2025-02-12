@@ -41,7 +41,8 @@ def mark_file_as_processed(file_path):
 def scan_and_ingest():
     """Scans the raw data folder and processes unprocessed PDFs."""
     pdf_files = [
-        f for f in os.listdir(DATA_FOLDER) 
+        f
+        for f in os.listdir(DATA_FOLDER)
         if f.lower().endswith(".pdf") and not f.startswith("_")
     ]
 
