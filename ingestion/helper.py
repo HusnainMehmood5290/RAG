@@ -1,6 +1,6 @@
 import os
 import pymupdf4llm
-from langchain_community.document_loaders import UnstructuredMarkdownLoader
+# from langchain_community.document_loaders import UnstructuredMarkdownLoader
 from dotenv import load_dotenv
 from models.model import Models
 from langchain.storage import LocalFileStore
@@ -8,6 +8,7 @@ from langchain.storage._lc_store import create_kv_docstore
 from langchain_chroma import Chroma
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain.retrievers import ParentDocumentRetriever
+from langchain_text_splitters import MarkdownHeaderTextSplitter
 
 # Load environment variables
 load_dotenv()
@@ -23,8 +24,8 @@ models = Models()
 embeddings = getattr(models, embedding_name, None)
 
 # Chunking settings
-CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", 500))
-CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", 50))
+CHUNK_SIZE = int(os.getenv("CHUNK_SIZE"))
+CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP"))
 
 
 def create_parent_retriever():
@@ -43,7 +44,7 @@ def create_parent_retriever():
             chunk_overlap=CHUNK_OVERLAP,
             add_start_index=True,
         )
-        parent_splitter = RecursiveCharacterTextSplitter(chunk_size=2000)
+        parent_splitter = RecursiveCharacterTextSplitter(chunk_size=4000)
 
         return ParentDocumentRetriever(
             vectorstore=vector_store,
@@ -56,20 +57,20 @@ def create_parent_retriever():
         return None
 
 
-def convert_pdf_to_markdown(file_path):
-    """Converts a PDF file to Markdown and saves it in the converted directory."""
-    try:
-        base_name = os.path.splitext(os.path.basename(file_path))[0]
-        converted_md_path = os.path.join(CONVERTED_DIR, f"{base_name}.md")
+def document_splitter(file):
+    md_content = pymupdf4llm.to_markdown(file)  #convert to markdwon
+    headers_to_split_on = [ #this thing store the meta data base on header
+        ("#", "Header 1"),
+        ("##", "Header 2"),
+        ("###", "Header 3"),
+        ("####", "Header 3"),
+        ("#####", "Header 3"),
+        ("######", "Header 3"),
+    ]
+    markdown_splitter = MarkdownHeaderTextSplitter(headers_to_split_on) #split on the base of define header
+    markdwon_splitted_document = markdown_splitter.split_text(md_content)
+    return markdwon_splitted_document #return that spilited data
 
-        md_content = pymupdf4llm.to_markdown(file_path)
-        with open(converted_md_path, "w", encoding="utf-8") as f:
-            f.write(md_content)
-
-        return converted_md_path
-    except Exception as e:
-        print(f"ERROR: Failed to convert PDF to Markdown - {e}")
-        return None
 
 
 def load_file(file_path):
@@ -79,23 +80,19 @@ def load_file(file_path):
     2. Loads the Markdown into a retriever.
     3. Adds the document to the vector store.
     """
-    converted_md_path = convert_pdf_to_markdown(file_path)
-    if not converted_md_path:
-        print(f"ERROR: Markdown conversion failed for {file_path}")
-        return
-
+    try:
+        header_to_split=document_splitter(file=file_path)
+    except Exception as e:
+        print(f"ERROR: while splitting through markdwonHeaderTextSplitter")
     parent_retriever = create_parent_retriever()
     if not parent_retriever:
         print("ERROR: Parent retriever could not be created.")
         return
 
     try:
-        loader = UnstructuredMarkdownLoader(converted_md_path)
-        document = loader.load()
-
-        print(f"Adding document {converted_md_path} to retriever...")
-        parent_retriever.add_documents(document)
+        print(f"Adding document {file_path} to retriever...")
+        parent_retriever.add_documents(header_to_split)
 
     except Exception as e:
-        print(f"ERROR: Processing failed for {converted_md_path} - {e}")
+        print(f"ERROR: Processing failed for {file_path} - {e}")
 

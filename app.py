@@ -1,7 +1,7 @@
 from models.model import Models
 import os
 from dotenv import load_dotenv
-from langgraph.graph import MessagesState,StateGraph
+# from langgraph.graph import MessagesState,StateGraph
 # Load environment variables
 load_dotenv()
 
@@ -22,4 +22,4 @@ while True:
     if query=="q":
         break
     else:
-        print(llm.invoke(query).content)
+        print(llm.invokhie(query).content)
