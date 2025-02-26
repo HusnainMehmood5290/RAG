@@ -1,6 +1,7 @@
 from models.model import Models
 import os
 from dotenv import load_dotenv
+from ingestion.helper import create_parent_retriever
 # from langgraph.graph import MessagesState,StateGraph
 # Load environment variables
 load_dotenv()
@@ -22,4 +23,7 @@ while True:
     if query=="q":
         break
     else:
-        print(llm.invokhie(query).content)
+        retriever=create_parent_retriever()
+        retrieved=retriever.invoke(query)
+        print(retrieved)
+        # print(llm.invokhie(query).content)
