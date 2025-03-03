@@ -14,3 +14,5 @@ langgraph
 sentence-transformers
 langchain_cohere
 nltk
+streamlit
+streamlit-chat
