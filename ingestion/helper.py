@@ -3,19 +3,24 @@
 PDFs are converted to Markdown (pymupdf4llm), split on Markdown headers, and
 indexed into the ParentDocumentRetriever's stores. All failures raise; callers
 decide how to handle them.
+
+Re-indexing an updated file is safe: all vectors and docstore entries from the
+file's previous fingerprint are deleted *before* the new ones are added, so
+stores never contain stale or duplicated content for the same source name.
 """
 
 from __future__ import annotations
 
 import hashlib
 import logging
+from functools import lru_cache
 from pathlib import Path
 
 import pymupdf4llm
 from langchain_core.documents import Document
 from langchain_text_splitters import MarkdownHeaderTextSplitter
 
-from config import get_settings
+from config import Settings, get_settings
 from rag.pipeline import build_parent_retriever
 
 logger = logging.getLogger(__name__)
@@ -43,7 +48,10 @@ def file_fingerprint(path: Path) -> str:
 
 def markdown_to_documents(md_content: str, source: str) -> list[Document]:
     """Split Markdown text into header-scoped LangChain documents."""
-    splitter = MarkdownHeaderTextSplitter(headers_to_split_on=HEADERS_TO_SPLIT_ON)
+    splitter = MarkdownHeaderTextSplitter(
+        headers_to_split_on=HEADERS_TO_SPLIT_ON,
+        strip_headers=False,  # keep header text in page_content for context quality
+    )
     docs = splitter.split_text(md_content)
     if not docs:
         raise ValueError(f"Markdown splitting produced no documents for {source!r}.")
@@ -60,14 +68,60 @@ def convert_pdf_to_markdown(pdf_path: Path) -> str:
     return md_content
 
 
-def load_file(file_path: str | Path) -> int:
+@lru_cache(maxsize=1)
+def get_ingest_retriever(settings: Settings | None = None):
+    """Build the retriever once per process.
+
+    Creating Chroma + the embedding model per file is expensive and can leave
+    stale SQLite handles behind; sharing one instance across a batch avoids
+    both problems.
+    """
+    return build_parent_retriever(settings or get_settings())
+
+
+def _purge_previous_index(retriever, source_name: str, current_hash: str) -> int:
+    """Delete vectors/docstore entries belonging to older ingests of this file.
+
+    Matches documents whose ``source`` equals this filename but whose
+    ``file_hash`` differs from the one about to be indexed (i.e., the file was
+    updated since the last run). Returns the number of parent docs removed.
+    """
+    try:
+        results = retriever.vectorstore.get(where={"source": source_name})
+    except Exception:
+        logger.exception("Could not query prior vectors for %s; skipping purge.", source_name)
+        return 0
+    ids = results.get("ids") or []
+    metadatas = results.get("metadatas") or []
+    stale_ids: list[str] = []
+    for cid, meta in zip(ids, metadatas, strict=False):
+        meta = meta or {}
+        if meta.get("file_hash") and meta["file_hash"] != current_hash:
+            stale_ids.append(cid)
+    if not stale_ids:
+        return 0
+    # Child vector ids look like "<parent_id>:<child_idx>" (or ":<n>" suffix);
+    # map them back to unique parent ids before touching the docstore.
+    parent_ids = {cid.rsplit(":", 1)[0] for cid in stale_ids}
+    retriever.vectorstore.delete(ids=stale_ids)
+    retriever.docstore.delete(list(parent_ids))
+    logger.info(
+        "Purged %d stale child vectors (%d parents) from previous index of %s.",
+        len(stale_ids),
+        len(parent_ids),
+        source_name,
+    )
+    return len(parent_ids)
+
+
+def load_file(file_path: str | Path, settings: Settings | None = None) -> int:
     """Process one PDF: convert -> split -> index into the parent retriever.
 
     Returns the number of parent documents added. Raises on any failure so
     the caller can log/skip without corrupting state.
     """
     path = Path(file_path)
-    settings = get_settings()
+    settings = settings or get_settings()
 
     logger.info("Converting PDF to Markdown: %s", path.name)
     md_content = convert_pdf_to_markdown(path)
@@ -75,11 +129,15 @@ def load_file(file_path: str | Path) -> int:
     documents = markdown_to_documents(md_content, source=path.name)
     logger.info("Split %s into %d header-scoped documents.", path.name, len(documents))
 
-    retriever = build_parent_retriever(settings)
+    retriever = get_ingest_retriever(settings)
     fingerprint = file_fingerprint(path)
     for doc in documents:
         doc.metadata["file_hash"] = fingerprint
     ids = [f"{fingerprint}:{i}" for i in range(len(documents))]
+
+    # Delete-before-insert keeps re-indexing an updated file atomic-ish and
+    # prevents duplicate/stale chunks from lingering in either store.
+    _purge_previous_index(retriever, path.name, fingerprint)
 
     retriever.add_documents(documents, ids=ids)
     logger.info(

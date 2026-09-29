@@ -13,6 +13,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from dotenv import load_dotenv
+from pydantic import SecretStr
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 
@@ -31,16 +32,21 @@ def _require(name: str) -> str:
     return value
 
 
-def _optional_int(name: str, default: int) -> int:
+def _optional_int(name: str, default: int, *, minimum: int = 0) -> int:
     raw = os.getenv(name, "").strip()
     if not raw:
         return default
     try:
-        return int(raw)
+        value = int(raw)
     except ValueError as exc:
         raise ConfigurationError(
             f"Environment variable '{name}' must be an integer, got: {raw!r}"
         ) from exc
+    if value < minimum:
+        raise ConfigurationError(
+            f"Environment variable '{name}' must be >= {minimum}, got {value}."
+        )
+    return value
 
 
 @dataclass(frozen=True)
@@ -48,7 +54,8 @@ class Settings:
     """Immutable snapshot of the application configuration."""
 
     # --- Required secrets / identifiers -------------------------------------
-    google_api_key: str = field(default_factory=lambda: _require("GOOGLE_API_KEY"))
+    # SecretStr keeps the raw key out of ``repr()``/logs; use .get_secret_value().
+    google_api_key: SecretStr = field(default_factory=lambda: SecretStr(_require("GOOGLE_API_KEY")))
 
     # --- Model selection ------------------------------------------------------
     llm_name: str = field(default_factory=lambda: os.getenv("LLM_NAME", "gemini-1.5-flash"))
@@ -59,9 +66,11 @@ class Settings:
     )
 
     # --- Chunking ---------------------------------------------------------------
-    chunk_size: int = field(default_factory=lambda: _optional_int("CHUNK_SIZE", 400))
+    chunk_size: int = field(default_factory=lambda: _optional_int("CHUNK_SIZE", 400, minimum=1))
     chunk_overlap: int = field(default_factory=lambda: _optional_int("CHUNK_OVERLAP", 50))
-    parent_chunk_size: int = field(default_factory=lambda: _optional_int("PARENT_CHUNK_SIZE", 4000))
+    parent_chunk_size: int = field(
+        default_factory=lambda: _optional_int("PARENT_CHUNK_SIZE", 4000, minimum=1)
+    )
 
     # --- Storage paths (resolved relative to the project root) ----------------
     local_store_path: Path = field(
@@ -80,11 +89,15 @@ class Settings:
         default_factory=lambda: PROJECT_ROOT / os.getenv("PROCESSED_DIR", "ingestion/processed")
     )
     watch_interval_seconds: int = field(
-        default_factory=lambda: _optional_int("WATCH_INTERVAL_SECONDS", 10)
+        default_factory=lambda: _optional_int("WATCH_INTERVAL_SECONDS", 10, minimum=1)
     )
 
     # --- Retrieval / generation ----------------------------------------------
-    retrieval_k: int = field(default_factory=lambda: _optional_int("RETRIEVAL_K", 4))
+    retrieval_k: int = field(default_factory=lambda: _optional_int("RETRIEVAL_K", 4, minimum=1))
+    # Hard cap on total characters of retrieved context sent to the LLM.
+    max_context_chars: int = field(
+        default_factory=lambda: _optional_int("MAX_CONTEXT_CHARS", 8000, minimum=1)
+    )
 
     def validate(self) -> None:
         """Cross-field validation with human-readable errors."""
@@ -93,8 +106,6 @@ class Settings:
                 f"CHUNK_OVERLAP ({self.chunk_overlap}) must be smaller than "
                 f"CHUNK_SIZE ({self.chunk_size})."
             )
-        if self.retrieval_k < 1:
-            raise ConfigurationError(f"RETRIEVAL_K must be >= 1, got {self.retrieval_k}.")
 
     def ensure_directories(self) -> None:
         for path in (

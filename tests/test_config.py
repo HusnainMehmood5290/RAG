@@ -57,9 +57,35 @@ def test_defaults_applied(monkeypatch, tmp_path):
     assert settings.chunk_overlap == 50
     assert settings.retrieval_k == 4
     assert settings.collection_name == "documents"
+    assert settings.max_context_chars == 8000
     # ensure_directories created the store folders under tmp project root
     assert (tmp_path / "store/local_store").is_dir()
     assert (tmp_path / "store/vector_store").is_dir()
+
+
+def test_negative_chunk_size_rejected_early(monkeypatch, tmp_path):
+    monkeypatch.setenv("GOOGLE_API_KEY", "k")
+    monkeypatch.setenv("CHUNK_SIZE", "-10")
+    monkeypatch.setattr(config, "PROJECT_ROOT", tmp_path)
+    with pytest.raises(ConfigurationError, match="CHUNK_SIZE.*>= 1"):
+        config.get_settings()
+
+
+def test_zero_retrieval_k_rejected(monkeypatch, tmp_path):
+    monkeypatch.setenv("GOOGLE_API_KEY", "k")
+    monkeypatch.setenv("RETRIEVAL_K", "0")
+    monkeypatch.setattr(config, "PROJECT_ROOT", tmp_path)
+    with pytest.raises(ConfigurationError, match="'RETRIEVAL_K' must be >= 1"):
+        config.get_settings()
+
+
+def test_api_key_hidden_from_repr(monkeypatch, tmp_path):
+    """The raw secret must never appear in repr()/logs (SecretStr guard)."""
+    monkeypatch.setenv("GOOGLE_API_KEY", "super-secret-value")
+    monkeypatch.setattr(config, "PROJECT_ROOT", tmp_path)
+    settings = config.get_settings()
+    assert "super-secret-value" not in repr(settings)
+    assert settings.google_api_key.get_secret_value() == "super-secret-value"
 
 
 def test_optional_int_parses_and_defaults():

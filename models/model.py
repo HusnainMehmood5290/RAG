@@ -24,7 +24,7 @@ def get_llm():
     logger.info("Initializing LLM: %s", settings.llm_name)
     return ChatGoogleGenerativeAI(
         model=settings.llm_name,
-        google_api_key=settings.google_api_key,
+        google_api_key=settings.google_api_key.get_secret_value(),
         temperature=0.2,
     )
 
