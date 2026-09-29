@@ -1,98 +1,91 @@
-import os
+"""Document loading and chunking helpers.
+
+PDFs are converted to Markdown (pymupdf4llm), split on Markdown headers, and
+indexed into the ParentDocumentRetriever's stores. All failures raise; callers
+decide how to handle them.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import logging
+from pathlib import Path
+
 import pymupdf4llm
-# from langchain_community.document_loaders import UnstructuredMarkdownLoader
-from dotenv import load_dotenv
-from models.model import Models
-from langchain.storage import LocalFileStore
-from langchain.storage._lc_store import create_kv_docstore
-from langchain_chroma import Chroma
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain.retrievers import ParentDocumentRetriever
+from langchain_core.documents import Document
 from langchain_text_splitters import MarkdownHeaderTextSplitter
 
-# Load environment variables
-load_dotenv()
+from config import get_settings
+from rag.pipeline import build_parent_retriever
 
-# Constants
-DATA_FOLDER = "ingestion/raw_data"
-CONVERTED_DIR = "ingestion/converted"
-os.makedirs(CONVERTED_DIR, exist_ok=True)  # Ensure directory exists
+logger = logging.getLogger(__name__)
 
-# Load embedding model
-embedding_name = os.getenv("EMBEDDING_NAME")
-models = Models()
-embeddings = getattr(models, embedding_name, None)
-
-# Chunking settings
-CHUNK_SIZE = int(os.getenv("CHUNK_SIZE"))
-CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP"))
-
-
-def create_parent_retriever():
-    """Creates and returns a ParentDocumentRetriever instance."""
-    try:
-        local_store = create_kv_docstore(LocalFileStore(os.getenv("LOCAL_STORE")))
-        vector_store = Chroma(
-            collection_name=os.getenv("COLLECTION_NAME"),
-            embedding_function=embeddings,
-            persist_directory=os.getenv("VECTOR_STORE"),
-        )
-
-        # Define chunking strategy
-        child_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=CHUNK_SIZE,
-            chunk_overlap=CHUNK_OVERLAP,
-            add_start_index=True,
-        )
-        parent_splitter = RecursiveCharacterTextSplitter(chunk_size=4000)
-
-        return ParentDocumentRetriever(
-            vectorstore=vector_store,
-            docstore=local_store,
-            child_splitter=child_splitter,
-            parent_splitter=parent_splitter,
-        )
-    except Exception as e:
-        print(f"ERROR: Failed to create parent retriever - {e}")
-        return None
+# Map each Markdown header level to its own metadata key (levels 4-6 were
+# previously mislabeled "Header 3").
+HEADERS_TO_SPLIT_ON = [
+    ("#", "Header 1"),
+    ("##", "Header 2"),
+    ("###", "Header 3"),
+    ("####", "Header 4"),
+    ("#####", "Header 5"),
+    ("######", "Header 6"),
+]
 
 
-def document_splitter(file):
-    md_content = pymupdf4llm.to_markdown(file)  #convert to markdwon
-    headers_to_split_on = [ #this thing store the meta data base on header
-        ("#", "Header 1"),
-        ("##", "Header 2"),
-        ("###", "Header 3"),
-        ("####", "Header 3"),
-        ("#####", "Header 3"),
-        ("######", "Header 3"),
-    ]
-    markdown_splitter = MarkdownHeaderTextSplitter(headers_to_split_on) #split on the base of define header
-    markdwon_splitted_document = markdown_splitter.split_text(md_content)
-    return markdwon_splitted_document #return that spilited data
+def file_fingerprint(path: Path) -> str:
+    """Stable sha256 hash of file contents (for idempotent ingestion)."""
+    digest = hashlib.sha256()
+    with path.open("rb") as fh:
+        for block in iter(lambda: fh.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
 
 
+def markdown_to_documents(md_content: str, source: str) -> list[Document]:
+    """Split Markdown text into header-scoped LangChain documents."""
+    splitter = MarkdownHeaderTextSplitter(headers_to_split_on=HEADERS_TO_SPLIT_ON)
+    docs = splitter.split_text(md_content)
+    if not docs:
+        raise ValueError(f"Markdown splitting produced no documents for {source!r}.")
+    for doc in docs:
+        doc.metadata.setdefault("source", source)
+    return docs
 
-def load_file(file_path):
+
+def convert_pdf_to_markdown(pdf_path: Path) -> str:
+    """Convert a PDF file to Markdown text."""
+    md_content = pymupdf4llm.to_markdown(str(pdf_path))
+    if not md_content.strip():
+        raise ValueError(f"PDF conversion produced empty Markdown for {pdf_path}.")
+    return md_content
+
+
+def load_file(file_path: str | Path) -> int:
+    """Process one PDF: convert -> split -> index into the parent retriever.
+
+    Returns the number of parent documents added. Raises on any failure so
+    the caller can log/skip without corrupting state.
     """
-    Processes a given PDF file:
-    1. Converts it to Markdown.
-    2. Loads the Markdown into a retriever.
-    3. Adds the document to the vector store.
-    """
-    try:
-        header_to_split=document_splitter(file=file_path)
-    except Exception as e:
-        print(f"ERROR: while splitting through markdwonHeaderTextSplitter")
-    parent_retriever = create_parent_retriever()
-    if not parent_retriever:
-        print("ERROR: Parent retriever could not be created.")
-        return
+    path = Path(file_path)
+    settings = get_settings()
 
-    try:
-        print(f"Adding document {file_path} to retriever...")
-        parent_retriever.add_documents(header_to_split)
+    logger.info("Converting PDF to Markdown: %s", path.name)
+    md_content = convert_pdf_to_markdown(path)
 
-    except Exception as e:
-        print(f"ERROR: Processing failed for {file_path} - {e}")
+    documents = markdown_to_documents(md_content, source=path.name)
+    logger.info("Split %s into %d header-scoped documents.", path.name, len(documents))
 
+    retriever = build_parent_retriever(settings)
+    fingerprint = file_fingerprint(path)
+    for doc in documents:
+        doc.metadata["file_hash"] = fingerprint
+    ids = [f"{fingerprint}:{i}" for i in range(len(documents))]
+
+    retriever.add_documents(documents, ids=ids)
+    logger.info(
+        "Indexed %d documents from %s into collection '%s'.",
+        len(documents),
+        path.name,
+        settings.collection_name,
+    )
+    return len(documents)
