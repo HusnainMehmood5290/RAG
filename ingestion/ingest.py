@@ -3,6 +3,8 @@
 Idempotency is content-based: successfully ingested files are moved to
 ``processed/`` under a ``<sha256-prefix>__<name>`` filename, so identical
 re-uploads are detected and skipped instead of duplicated in the store.
+Updated files (same name, new content) are re-indexed with the stale vectors
+purged first -- see ``ingestion.helper.load_file``.
 """
 
 from __future__ import annotations
@@ -13,7 +15,7 @@ import time
 from pathlib import Path
 
 from config import Settings, get_settings
-from ingestion.helper import file_fingerprint, load_file
+from ingestion.helper import file_fingerprint, get_ingest_retriever, load_file
 from logging_config import configure_logging
 
 logger = logging.getLogger(__name__)
@@ -28,27 +30,55 @@ def ingest_file(path: Path, settings: Settings) -> bool:
     fingerprint = file_fingerprint(path)
     if _already_processed(settings.processed_dir, fingerprint, path.name):
         logger.info("Skipping (content already ingested): %s", path.name)
-        path.unlink(missing_ok=True)
-        return True
+        # The identical content is already indexed; remove the duplicate copy
+        # from raw_data so it is not re-detected every scan. If the processed
+        # archive was ever deleted, fall back to re-indexing instead of
+        # silently losing the file.
+        try:
+            path.unlink()
+        except OSError:
+            logger.exception("Could not delete duplicate %s; will re-ingest.", path)
+        else:
+            return True
 
     try:
-        count = load_file(path)
+        count = load_file(path, settings)
     except Exception:
         logger.exception("Failed to ingest %s - leaving it in raw_data for retry.", path)
         return False
 
     dest = settings.processed_dir / f"{fingerprint[:16]}__{path.name}"
-    path.replace(dest)
+    try:
+        path.replace(dest)
+    except OSError:
+        # The content *is* indexed; keep the copy in raw_data so the
+        # processed-archive idempotency check still holds next scan.
+        logger.exception("Ingested %s but could not move it to %s.", path.name, dest)
+        return True
     logger.info("Ingested %s (%d documents) -> %s", path.name, count, dest.name)
     return True
 
 
 def scan_once(settings: Settings) -> int:
-    """Process every pending PDF in the raw-data folder. Returns success count."""
+    """Process every pending PDF in the raw-data folder. Returns success count.
+
+    The retriever/embedding model is built lazily on the first file that needs
+    indexing and shared by every subsequent file in the batch.
+    """
     pdfs = sorted(p for p in settings.raw_data_dir.glob("*.pdf") if p.is_file())
     if not pdfs:
         logger.debug("No new PDFs found in %s", settings.raw_data_dir)
-    return sum(1 for pdf in pdfs if ingest_file(pdf, settings))
+    succeeded = 0
+    try:
+        for pdf in pdfs:
+            try:
+                if ingest_file(pdf, settings):
+                    succeeded += 1
+            except Exception:
+                logger.exception("Unexpected error while processing %s.", pdf)
+    finally:
+        get_ingest_retriever.cache_clear()
+    return succeeded
 
 
 def watch(settings: Settings) -> None:
