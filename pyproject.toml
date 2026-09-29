@@ -17,4 +17,4 @@ known-first-party = ["config", "logging_config", "models", "rag", "ingestion"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q"
+addopts = "-q -p no:libtmux"
