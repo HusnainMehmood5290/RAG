@@ -1,19 +1,18 @@
-# Core LLM / RAG stack
-langchain==0.3.27
-langchain-core==0.3.80
-langchain-community==0.3.27
-langchain-text-splitters==0.3.10
-langchain-google-genai==2.1.10
-langchain-huggingface==1.0.1
-langchain-chroma==1.0.4
-chromadb>=0.6,<1
-
-# Models & document parsing
-sentence-transformers==3.4.1
-pymupdf4llm==0.0.17
-
-# App / UI
-streamlit==1.49.0
-python-dotenv==1.1.1
-
-# Dev / test (install with: pip install -r requirements-dev.txt)
+langchain-google_genai
+langchain-huggingface
+langchain-chroma
+langchain
+langchain-core
+langchain-community
+pymupdf4llm
+langchain-text-splitters
+unstructured
+llama-cpp-python
+dotenv
+unstructured[md]
+langgraph
+sentence-transformers
+langchain_cohere
+nltk
+streamlit
+streamlit-chat

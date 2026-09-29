@@ -1,85 +1,65 @@
-"""Ingestion worker: watches ``raw_data/`` for new PDFs and indexes them.
-
-Idempotency is content-based: successfully ingested files are moved to
-``processed/`` under a ``<sha256-prefix>__<name>`` filename, so identical
-re-uploads are detected and skipped instead of duplicated in the store.
-"""
-
-from __future__ import annotations
-
-import argparse
-import logging
+import os
 import time
-from pathlib import Path
+from ingestion.helper import load_file
 
-from config import Settings, get_settings
-from ingestion.helper import file_fingerprint, load_file
-from logging_config import configure_logging
-
-logger = logging.getLogger(__name__)
+# Constants
+DATA_FOLDER = "ingestion/raw_data"
+CHECK_INTERVAL = 10  # Time interval for checking new PDFs
 
 
-def _already_processed(target_dir: Path, fingerprint: str, name: str) -> bool:
-    return (target_dir / f"{fingerprint[:16]}__{name}").exists()
+def ingest_file(file_path):
+    """Processes and stores embeddings for a PDF file."""
+    filename = os.path.basename(file_path)
 
+    # Skip already processed PDFs (files starting with '_')
+    if filename.startswith("_"):
+        print(f"Skipping (Already Processed): {file_path}")
+        return
 
-def ingest_file(path: Path, settings: Settings) -> bool:
-    """Ingest a single PDF. Returns True on success."""
-    fingerprint = file_fingerprint(path)
-    if _already_processed(settings.processed_dir, fingerprint, path.name):
-        logger.info("Skipping (content already ingested): %s", path.name)
-        path.unlink(missing_ok=True)
-        return True
+    if not filename.lower().endswith(".pdf"):
+        print(f"Skipping (Not a PDF): {file_path}")
+        return
 
+    print(f"Processing: {file_path}")
     try:
-        count = load_file(path)
-    except Exception:
-        logger.exception("Failed to ingest %s - leaving it in raw_data for retry.", path)
-        return False
-
-    dest = settings.processed_dir / f"{fingerprint[:16]}__{path.name}"
-    path.replace(dest)
-    logger.info("Ingested %s (%d documents) -> %s", path.name, count, dest.name)
-    return True
+        load_file(file_path)
+        mark_file_as_processed(file_path)
+    except Exception as e:
+        print(f"ERROR: {file_path} could not be processed - {e}")
 
 
-def scan_once(settings: Settings) -> int:
-    """Process every pending PDF in the raw-data folder. Returns success count."""
-    pdfs = sorted(p for p in settings.raw_data_dir.glob("*.pdf") if p.is_file())
-    if not pdfs:
-        logger.debug("No new PDFs found in %s", settings.raw_data_dir)
-    return sum(1 for pdf in pdfs if ingest_file(pdf, settings))
+def mark_file_as_processed(file_path):
+    """Renames the processed file to prevent reprocessing."""
+    try:
+        new_file_path = os.path.join(DATA_FOLDER, f"_{os.path.basename(file_path)}")
+        os.rename(file_path, new_file_path)
+        print(f"Marked as processed: {new_file_path}")
+    except Exception as e:
+        print(f"ERROR: Failed to rename {file_path} - {e}")
 
 
-def watch(settings: Settings) -> None:
-    logger.info(
-        "Watching %s for new PDFs every %ds. Press Ctrl+C to stop.",
-        settings.raw_data_dir,
-        settings.watch_interval_seconds,
-    )
+def scan_and_ingest():
+    """Scans the raw data folder and processes unprocessed PDFs."""
+    pdf_files = [
+        f for f in os.listdir(DATA_FOLDER) 
+        if f.lower().endswith(".pdf") and not f.startswith("_")
+    ]
+
+    for filename in pdf_files:
+        file_path = os.path.join(DATA_FOLDER, filename)
+        ingest_file(file_path)
+
+
+def main_loop():
+    """Continuously checks for new PDF files in the raw data folder."""
+    print("Watching for new files... Press Ctrl+C to stop.")
     try:
         while True:
-            scan_once(settings)
-            time.sleep(settings.watch_interval_seconds)
+            scan_and_ingest()
+            time.sleep(CHECK_INTERVAL)
     except KeyboardInterrupt:
-        logger.info("Interrupted. Exiting gracefully.")
-
-
-def main() -> None:
-    configure_logging()
-    parser = argparse.ArgumentParser(description="PDF ingestion worker")
-    parser.add_argument(
-        "--once",
-        action="store_true",
-        help="Scan and ingest pending files, then exit (for cron/CI use).",
-    )
-    args = parser.parse_args()
-    settings = get_settings()
-    if args.once:
-        scan_once(settings)
-    else:
-        watch(settings)
+        print("\nProcess interrupted. Exiting gracefully...")
 
 
 if __name__ == "__main__":
-    main()
+    main_loop()

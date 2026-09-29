@@ -1,49 +1,31 @@
-"""Delete local vector/doc stores so the next ingestion starts from scratch.
-
-Usage:
-    python scripts/clean_store.py          # preview (dry run)
-    python scripts/clean_store.py --force  # actually delete
-"""
-
-from __future__ import annotations
-
-import argparse
+import os
 import shutil
-import sys
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+# Directories to remove completely
+DIRS_TO_REMOVE = [
+    "ingestion/converted",
+    "ingestion/__pycache__",
+    "models/__pycache__",
+    "store/local_store",
+    "store/vector_store",
+]
 
-from config import get_settings  # noqa: E402
-
-
-def remove(path: Path, force: bool) -> None:
-    if not path.exists():
-        print(f"Skipping: {path} (does not exist)")
-        return
-    if force:
-        shutil.rmtree(path)
-        print(f"Deleted: {path}")
+def remove_directory(directory):
+    """Deletes a directory and all its contents if it exists."""
+    if os.path.exists(directory):
+        try:
+            shutil.rmtree(directory)  # Remove entire directory
+            print(f"Deleted directory: {directory}")
+        except Exception as e:
+            print(f"ERROR: Failed to delete {directory} - {e}")
     else:
-        print(f"Would delete: {path}  (re-run with --force)")
+        print(f"Skipping: {directory} (Does not exist)")
 
-
-def main() -> int:
-    parser = argparse.ArgumentParser(description="Clean local stores")
-    parser.add_argument("--force", action="store_true", help="Actually delete files.")
-    args = parser.parse_args()
-
-    settings = get_settings()
-    targets = [
-        settings.local_store_path,
-        settings.vector_store_path,
-    ]
-    for target in targets:
-        remove(target, args.force)
-    if not args.force:
-        print("\nDry run only. Re-run with --force to delete.")
-    return 0
-
+def clean_all():
+    """Removes all specified directories."""
+    for directory in DIRS_TO_REMOVE:
+        remove_directory(directory)
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    clean_all()
+    print("Cleanup complete! 🚀")
