@@ -1,0 +1,11 @@
+.git
+__pycache__/
+*.pyc
+.env
+store/
+ingestion/raw_data/
+ingestion/processed/
+notebooks/
+tests/
+.pytest_cache/
+.ruff_cache/
