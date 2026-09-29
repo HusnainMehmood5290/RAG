@@ -93,11 +93,12 @@ def _purge_previous_index(retriever, source_name: str, current_hash: str) -> int
         return 0
     ids = results.get("ids") or []
     metadatas = results.get("metadatas") or []
-    stale_ids: list[str] = []
-    for cid, meta in zip(ids, metadatas, strict=False):
-        meta = meta or {}
-        if meta.get("file_hash") and meta["file_hash"] != current_hash:
-            stale_ids.append(cid)
+    # Single-pass scan; skip the network round-trip entirely when nothing is stale.
+    stale_ids = [
+        cid
+        for cid, meta in zip(ids, metadatas, strict=False)
+        if (meta or {}).get("file_hash", "") not in ("", current_hash)
+    ]
     if not stale_ids:
         return 0
     # Child vector ids look like "<parent_id>:<child_idx>" (or ":<n>" suffix);

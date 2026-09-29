@@ -94,6 +94,10 @@ def build_parent_retriever(settings: Settings | None = None):
         collection_name=settings.collection_name,
         embedding_function=get_embeddings(),
         persist_directory=str(settings.vector_store_path),
+        # Cosine distance: robust to chunk length variation and pairs with the
+        # L2-normalized embeddings produced by get_embeddings(). The default
+        # (L2) makes long chunks score worse than short ones for equal content.
+        collection_metadata={"hnsw:space": "cosine"},
     )
 
     child_splitter = RecursiveCharacterTextSplitter(
@@ -123,38 +127,43 @@ def get_retriever():
     return retriever
 
 
+def _as_text(content: object) -> str:
+    """Extract plain text from an LLM response content block."""
+    return content if isinstance(content, str) else str(content)
+
+
+# Built once at import time instead of on every follow-up query.
+_CONDENSE_PROMPT = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            "Given the conversation and a follow-up question, rewrite the "
+            "follow-up as a standalone question that needs no history. "
+            "Output only the rewritten question.",
+        ),
+        ("human", "Conversation:\n{transcript}\n\nFollow-up: {question}"),
+    ]
+)
+
+
 def condense_question(question: str, history: list[tuple[str, str]]) -> str:
     """Rewrite a follow-up question using conversation history.
 
     Standalone rewrites let multi-turn chat work with a stateless retriever.
+    Short answers are cheap to condense; long assistant turns are clipped so
+    the transcript never blows the condenser's own context budget.
     On any failure (or empty history) the original question is returned.
     """
     if not history:
         return question
-    transcript = "\n".join(f"{role}: {text}" for role, text in history[-6:])
+    transcript = "\n".join(f"{role}: {text[:300]}" for role, text in history[-6:])
     try:
         from models.model import get_llm
 
-        llm = get_llm()
-        messages = (
-            ChatPromptTemplate.from_messages(
-                [
-                    (
-                        "system",
-                        "Given the conversation and a follow-up question, rewrite the "
-                        "follow-up as a standalone question that needs no history. "
-                        "Output only the rewritten question.",
-                    ),
-                    ("human", "Conversation:\n{transcript}\n\nFollow-up: {question}"),
-                ]
-            )
-            .invoke({"transcript": transcript, "question": question})
-            .to_messages()
+        response = get_llm().invoke(
+            _CONDENSE_PROMPT.invoke({"transcript": transcript, "question": question}).to_messages()
         )
-        response = llm.invoke(messages)
-        condensed = (
-            response.content if isinstance(response.content, str) else str(response.content)
-        ).strip()
+        condensed = _as_text(response.content).strip()
         return condensed or question
     except Exception:  # pragma: no cover - network/model failures degrade gracefully
         logger.exception("Query condensation failed; using the raw question.")
@@ -189,5 +198,4 @@ def answer_question(
     from models.model import get_llm
 
     response = get_llm().invoke(messages)
-    answer = response.content if isinstance(response.content, str) else str(response.content)
-    return AnswerResult(answer=answer, context=docs, truncated=truncated)
+    return AnswerResult(answer=_as_text(response.content), context=docs, truncated=truncated)

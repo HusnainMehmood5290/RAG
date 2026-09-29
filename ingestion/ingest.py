@@ -48,7 +48,13 @@ def ingest_file(path: Path, settings: Settings) -> bool:
         return False
 
     dest = settings.processed_dir / f"{fingerprint[:16]}__{path.name}"
-    path.replace(dest)
+    try:
+        path.replace(dest)
+    except OSError:
+        # The content *is* indexed; keep the copy in raw_data so the
+        # processed-archive idempotency check still holds next scan.
+        logger.exception("Ingested %s but could not move it to %s.", path.name, dest)
+        return True
     logger.info("Ingested %s (%d documents) -> %s", path.name, count, dest.name)
     return True
 
