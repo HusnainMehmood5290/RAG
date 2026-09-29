@@ -37,8 +37,20 @@ def test_purge_noop_when_all_current():
     retriever.docstore.delete.assert_not_called()
 
 
-def test_purge_survives_vectorstore_errors():
+def test_purge_aborts_on_vectorstore_errors():
     retriever = MagicMock()
     retriever.vectorstore.get.side_effect = RuntimeError("chroma locked")
-    # Must not raise: worst case we keep duplicates rather than crash ingestion.
-    assert _purge_previous_index(retriever, "x.pdf", "h") == 0
+    # SECURITY: must raise. Silently skipping the purge would leave stale
+    # vectors from a previous version of the document retrievable forever.
+    with pytest.raises(RuntimeError, match="refusing to re-index"):
+        _purge_previous_index(retriever, "x.pdf", "h")
+
+
+def test_purge_aborts_on_partial_delete_failure():
+    old, new = "a" * 32, "b" * 32
+    retriever = _fake_retriever(
+        ids=[f"{old}:0:1"], metadatas=[{"source": "x.pdf", "file_hash": old}]
+    )
+    retriever.docstore.delete.side_effect = OSError("disk full")
+    with pytest.raises(RuntimeError, match="Partial purge failure"):
+        _purge_previous_index(retriever, "x.pdf", new)

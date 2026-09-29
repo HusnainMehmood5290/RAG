@@ -49,12 +49,30 @@ def _optional_int(name: str, default: int, *, minimum: int = 0) -> int:
     return value
 
 
+def _project_path(env_value: str, default: str) -> Path:
+    """Resolve a configured directory safely relative to the project root.
+
+    Absolute values are honored; relative ones are joined to the project root.
+    ``os.path.normpath`` collapses any ``..`` segments so an env value can
+    never escape via traversal tricks (the value is operator-controlled config,
+    not user input, but we still keep it predictable).
+    """
+    raw = os.getenv(env_value, "").strip() or default
+    candidate = Path(raw)
+    if not candidate.is_absolute():
+        candidate = PROJECT_ROOT / candidate
+    return Path(os.path.normpath(candidate))
+
+
 @dataclass(frozen=True)
 class Settings:
     """Immutable snapshot of the application configuration."""
 
     # --- Required secrets / identifiers -------------------------------------
-    # SecretStr keeps the raw key out of ``repr()``/logs; use .get_secret_value().
+    # Read the key directly from the environment (NOT via os.environ mutation):
+    # exporting it process-wide would leak the secret to every child process
+    # and to any library that dumps the environment. SecretStr keeps the raw
+    # key out of ``repr()``/logs; use .get_secret_value().
     google_api_key: SecretStr = field(default_factory=lambda: SecretStr(_require("GOOGLE_API_KEY")))
 
     # --- Model selection ------------------------------------------------------
@@ -74,19 +92,19 @@ class Settings:
 
     # --- Storage paths (resolved relative to the project root) ----------------
     local_store_path: Path = field(
-        default_factory=lambda: PROJECT_ROOT / os.getenv("LOCAL_STORE", "store/local_store")
+        default_factory=lambda: _project_path("LOCAL_STORE", "store/local_store")
     )
     vector_store_path: Path = field(
-        default_factory=lambda: PROJECT_ROOT / os.getenv("VECTOR_STORE", "store/vector_store")
+        default_factory=lambda: _project_path("VECTOR_STORE", "store/vector_store")
     )
     collection_name: str = field(default_factory=lambda: os.getenv("COLLECTION_NAME", "documents"))
 
     # --- Ingestion -----------------------------------------------------------
     raw_data_dir: Path = field(
-        default_factory=lambda: PROJECT_ROOT / os.getenv("RAW_DATA_DIR", "ingestion/raw_data")
+        default_factory=lambda: _project_path("RAW_DATA_DIR", "ingestion/raw_data")
     )
     processed_dir: Path = field(
-        default_factory=lambda: PROJECT_ROOT / os.getenv("PROCESSED_DIR", "ingestion/processed")
+        default_factory=lambda: _project_path("PROCESSED_DIR", "ingestion/processed")
     )
     watch_interval_seconds: int = field(
         default_factory=lambda: _optional_int("WATCH_INTERVAL_SECONDS", 10, minimum=1)

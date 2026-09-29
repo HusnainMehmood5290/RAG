@@ -85,12 +85,20 @@ def _purge_previous_index(retriever, source_name: str, current_hash: str) -> int
     Matches documents whose ``source`` equals this filename but whose
     ``file_hash`` differs from the one about to be indexed (i.e., the file was
     updated since the last run). Returns the number of parent docs removed.
+
+    SECURITY: if the query or the delete fails, this raises instead of
+    returning silently -- otherwise stale content from a previous version of
+    the document would stay retrievable alongside (or instead of) the new
+    content, leaking superseded data into answers. Callers abort ingestion of
+    the file and leave it in ``raw_data`` for retry.
     """
     try:
         results = retriever.vectorstore.get(where={"source": source_name})
-    except Exception:
-        logger.exception("Could not query prior vectors for %s; skipping purge.", source_name)
-        return 0
+    except Exception as exc:
+        raise RuntimeError(
+            f"Cannot verify prior index state for {source_name!r}; "
+            "refusing to re-index over potentially stale vectors."
+        ) from exc
     ids = results.get("ids") or []
     metadatas = results.get("metadatas") or []
     # Single-pass scan; skip the network round-trip entirely when nothing is stale.
@@ -104,8 +112,14 @@ def _purge_previous_index(retriever, source_name: str, current_hash: str) -> int
     # Child vector ids look like "<parent_id>:<child_idx>" (or ":<n>" suffix);
     # map them back to unique parent ids before touching the docstore.
     parent_ids = {cid.rsplit(":", 1)[0] for cid in stale_ids}
-    retriever.vectorstore.delete(ids=stale_ids)
-    retriever.docstore.delete(list(parent_ids))
+    try:
+        retriever.vectorstore.delete(ids=stale_ids)
+        retriever.docstore.delete(list(parent_ids))
+    except Exception as exc:
+        raise RuntimeError(
+            f"Partial purge failure for {source_name!r}: stale vectors may "
+            "still be retrievable. Re-run ingestion to retry."
+        ) from exc
     logger.info(
         "Purged %d stale child vectors (%d parents) from previous index of %s.",
         len(stale_ids),

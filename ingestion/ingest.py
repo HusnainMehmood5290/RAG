@@ -5,12 +5,20 @@ Idempotency is content-based: successfully ingested files are moved to
 re-uploads are detected and skipped instead of duplicated in the store.
 Updated files (same name, new content) are re-indexed with the stale vectors
 purged first -- see ``ingestion.helper.load_file``.
+
+Security notes:
+* Only regular files whose extension is exactly ``.pdf`` are considered;
+  symlinks are rejected so a drop-folder cannot be used to read arbitrary
+  server-side files into the index.
+* Sanitized display names never contain path separators, ``..``, or leading
+  dots, preventing traversal when archived into ``processed/``.
 """
 
 from __future__ import annotations
 
 import argparse
 import logging
+import re
 import time
 from pathlib import Path
 
@@ -20,6 +28,30 @@ from logging_config import configure_logging
 
 logger = logging.getLogger(__name__)
 
+_UNSAFE_NAME_CHARS = re.compile(r"[^A-Za-z0-9._ -]+")
+
+
+def sanitize_display_name(name: str) -> str:
+    """Reduce an uploaded filename to a safe display/archive name.
+
+    Strips any directory components, blocks hidden files and ``..``, removes
+    control/unsafe characters, collapses repeated dots and enforces a length
+    cap. The result is always a single, plain filename component.
+    """
+    base = Path(name).name  # drop any directory components
+    base = _UNSAFE_NAME_CHARS.sub("_", base).strip(". ")  # no leading/trailing dots
+    base = re.sub(r"\.{2,}", ".", base)  # collapse dot runs (kills '..')
+    if not base.lower().endswith(".pdf"):
+        base += ".pdf"
+    return base[:120]
+
+
+def _is_safe_pdf(path: Path) -> bool:
+    """Regular (non-symlink) file with an exact ``.pdf`` extension."""
+    if path.is_symlink() or not path.is_file():
+        return False
+    return path.suffix.lower() == ".pdf"
+
 
 def _already_processed(target_dir: Path, fingerprint: str, name: str) -> bool:
     return (target_dir / f"{fingerprint[:16]}__{name}").exists()
@@ -27,8 +59,13 @@ def _already_processed(target_dir: Path, fingerprint: str, name: str) -> bool:
 
 def ingest_file(path: Path, settings: Settings) -> bool:
     """Ingest a single PDF. Returns True on success."""
+    if not _is_safe_pdf(path):
+        logger.warning("Refusing to ingest %s: not a regular .pdf file.", path)
+        return False
+
     fingerprint = file_fingerprint(path)
-    if _already_processed(settings.processed_dir, fingerprint, path.name):
+    display_name = sanitize_display_name(path.name)
+    if _already_processed(settings.processed_dir, fingerprint, display_name):
         logger.info("Skipping (content already ingested): %s", path.name)
         # The identical content is already indexed; remove the duplicate copy
         # from raw_data so it is not re-detected every scan. If the processed
@@ -47,7 +84,7 @@ def ingest_file(path: Path, settings: Settings) -> bool:
         logger.exception("Failed to ingest %s - leaving it in raw_data for retry.", path)
         return False
 
-    dest = settings.processed_dir / f"{fingerprint[:16]}__{path.name}"
+    dest = settings.processed_dir / f"{fingerprint[:16]}__{display_name}"
     try:
         path.replace(dest)
     except OSError:
@@ -65,7 +102,7 @@ def scan_once(settings: Settings) -> int:
     The retriever/embedding model is built lazily on the first file that needs
     indexing and shared by every subsequent file in the batch.
     """
-    pdfs = sorted(p for p in settings.raw_data_dir.glob("*.pdf") if p.is_file())
+    pdfs = sorted(p for p in settings.raw_data_dir.glob("*.pdf") if _is_safe_pdf(p))
     if not pdfs:
         logger.debug("No new PDFs found in %s", settings.raw_data_dir)
     succeeded = 0

@@ -46,9 +46,14 @@ try:
 except ConfigurationError as exc:
     st.error(f"Configuration error: {exc}")
     st.stop()
-except Exception as exc:  # model download / store errors should be visible too
+except Exception:  # model download / store errors should be visible too
     logging.getLogger("ui").exception("Backend initialization failed.")
-    st.error(f"Initialization failed: {exc}")
+    # SECURITY: full details (paths, stack) go only to the server log; the
+    # browser sees a generic message so internals are never leaked.
+    st.error(
+        "Initialization failed. Check the server logs for details "
+        "(set LOG_LEVEL=DEBUG for more information)."
+    )
     st.stop()
 
 if "messages" not in st.session_state:
@@ -82,9 +87,15 @@ if user_input:
             if result.truncated:
                 st.caption("ℹ️ Some documents were omitted to fit the context budget.")
             answer_text = result.answer
-        except Exception as exc:
+        except Exception:
+            # SECURITY: log the real error server-side, show a generic message.
+            # Raw exception text can contain filesystem paths, collection
+            # names, or provider error payloads that must not reach the client.
             logging.getLogger("ui").exception("Query failed.")
-            answer_text = f"⚠️ Something went wrong: {exc}"
+            answer_text = (
+                "⚠️ Something went wrong while answering. Please try again; "
+                "the server logs have the details."
+            )
             st.error(answer_text)
 
     st.session_state.messages.append({"role": "assistant", "content": answer_text})
