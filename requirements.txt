@@ -4,9 +4,9 @@ langchain-core==0.3.80
 langchain-community==0.3.27
 langchain-text-splitters==0.3.10
 langchain-google-genai==2.1.10
-langchain-huggingface==1.0.1
-langchain-chroma==1.0.4
-chromadb>=0.6,<1
+langchain-huggingface==0.3.0
+langchain-chroma==0.2.6
+chromadb>=1.0.20,<2
 
 # Models & document parsing
 sentence-transformers==3.4.1
