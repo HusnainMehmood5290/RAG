@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
 
+# Least-privilege permissions for the workflow itself.
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -12,8 +16,8 @@ jobs:
       matrix:
         python-version: ["3.10", "3.12"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11bd71901bbe5b16307ea39515fe4bc01f28b3f1 # v4.1.7 (pinned by commit)
+      - uses: actions/setup-python@0b9364532fe78543b6b3ded94981ba9e47ed1e2a # v5 (pinned by commit)
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
@@ -25,3 +29,21 @@ jobs:
         env:
           GOOGLE_API_KEY: dummy-key-for-ci
         run: pytest -q
+
+  # Supply-chain security: fail the build on any known-vulnerable dependency.
+  audit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b16307ea39515fe4bc01f28b3f1 # v4.1.7
+      - uses: actions/setup-python@0b9364532fe78543b6b3ded94981ba9e47ed1e2a # v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install runtime dependencies
+        run: pip install -r requirements.txt
+      - name: Audit dependencies (pip-audit / OSV)
+        run: |
+          pip install pip-audit==2.9.0
+          pip-audit --strict --progress-spinner off -r requirements.txt

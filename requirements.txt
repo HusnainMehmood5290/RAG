@@ -1,19 +1,23 @@
 # Core LLM / RAG stack
-langchain==0.3.27
-langchain-core==0.3.80
-langchain-community==0.3.27
+# SECURITY: all runtime deps are exact-pinned so no vulnerable version can be
+# resolved at install time. Bump deliberately and re-run `make audit` (pip-audit).
+langchain==0.3.30            # > 0.3.27: fixes manifest deserialization (CVE-2026-45134)
+langchain-core==0.3.86       # latest 0.3.x: fixes prompt-template validation & serialization injection (CVE-2026-40087, CVE-2025-68664)
+langchain-community==0.3.31
 langchain-text-splitters==0.3.10
-langchain-google-genai==2.1.10
+langchain-google-genai==2.1.12
 langchain-huggingface==0.3.0
 langchain-chroma==0.2.6
-chromadb>=1.0.20,<2
+# SECURITY: the old `>=1.0.20,<2` range resolved to versions carrying 2026
+# advisories (pre-auth code injection / tenant-isolation issues) with no
+# patched release inside that range. Pin to the latest audited release; if a
+# future advisory affects it, pip-audit in CI will fail the build.
+chromadb==1.5.9
 
 # Models & document parsing
 sentence-transformers==3.4.1
 pymupdf4llm==0.0.17
 
 # App / UI
-streamlit==1.49.0
-python-dotenv==1.1.1
-
-# Dev / test (install with: pip install -r requirements-dev.txt)
+streamlit==1.64.0            # > 1.49.0: fixes unauthenticated SSRF/NTLM leak & static cache hash collisions (CVE-2026-33682, CVE-2026-10804)
+python-dotenv==1.2.1         # > 1.1.1: fixes arbitrary file overwrite via symlink following (CVE-2026-28684)

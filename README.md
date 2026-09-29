@@ -24,7 +24,10 @@ user query ──► LCEL RAG chain ──► Gemini LLM ──► grounded answ
 - `ingestion/` — content-hash-idempotent PDF watcher (`--once` mode for cron/CI)
 - `ui/streamlit_app.py` — chat UI wired to the pipeline, shows sources
 - `scripts/clean_store.py` — reset stores (dry-run by default)
-- `tests/` — unit tests (config validation, header chunking, ingestion idempotency)
+- `tests/` — unit tests (config validation, header chunking, ingestion idempotency,
+  security hardening)
+- `.github/workflows/ci.yml` — lint + tests + `pip-audit` supply-chain gate
+- `Dockerfile` — hardened, non-root container image
 
 ## Quick start
 
@@ -51,13 +54,51 @@ All settings come from environment variables (see `.env.example`). Only
 `GOOGLE_API_KEY` is required; everything else has sensible defaults and is
 validated at startup (e.g., `CHUNK_OVERLAP < CHUNK_SIZE`).
 
-## Testing & linting
+## Testing, linting & security
 
 ```bash
 pytest                    # unit tests — no API keys or model downloads needed
 ruff check .              # lint
 ruff format --check .     # formatting
+make audit                # pip-audit: fail if any pinned dep has a known CVE
 ```
+
+CI (`.github/workflows/ci.yml`) runs lint + tests on Python 3.10/3.12 and a
+dedicated **audit** job that gates merges on `pip-audit --strict`.
+
+### Container
+
+```bash
+docker build -t parent-rag .
+docker run -p 8501:8501 --env-file .env \
+  -v rag-stores:/app/store -v rag-inbox:/app/ingestion/raw_data parent-rag
+```
+
+The image runs as a non-root user and sets security-relevant Streamlit flags
+(`headless`, `disableStaticCaching`, `enableXsrfProtection`).
+
+## Security posture
+
+- **Pinned dependencies**: every runtime requirement is exact-pinned with CVE
+  rationale comments; bump deliberately and re-run `make audit`.
+- **Ingestion hardening**: symlinks and non-regular files in the drop folder are
+  rejected (no server-side file exfiltration into the index); archived filenames
+  are sanitized against path traversal.
+- **Fail-closed indexing**: stale-index purge errors abort re-indexing instead of
+  silently leaving superseded content retrievable.
+- **Prompt-injection defenses**: retrieved document text and user questions are
+  neutralized (delimiter-close tags, role markers stripped) before prompt
+  interpolation; the system prompt forbids instruction-following from context.
+- **No info leaks**: client-facing UI errors omit raw exception details; full
+  tracebacks go only to server logs.
+- **Config path safety**: env-configured storage paths are normalized so `..`
+  segments cannot escape the project directory.
+
+> ⚠️ **Known gap — authentication**: the app currently has **no auth**. Anyone
+> who can reach the UI or write to the ingestion drop folder can query (and add
+> to) the knowledge base. Until authentication and per-user retrieval scoping are
+> added, deploy only behind a reverse proxy / VPN and never bind the container
+> directly to public networks.
 
 ## Design notes
 

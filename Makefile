@@ -1,4 +1,4 @@
-.PHONY: install install-dev test lint format run-cli run-ui ingest clean
+.PHONY: install install-dev test lint format audit run-cli run-ui ingest clean
 
 install:
 pip install -r requirements.txt
@@ -14,6 +14,10 @@ ruff check .
 
 format:
 ruff format .
+
+# Supply-chain check: fail if any pinned dependency has a known vulnerability.
+audit:
+pip-audit --strict -r requirements.txt
 
 run-cli:
 python app.py
